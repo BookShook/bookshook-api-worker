@@ -65,9 +65,10 @@ export async function handleAuthor(req: Request, env: Env) {
       JOIN author_portal_accounts a ON a.id = t.author_account_id
       WHERE t.token_hash = ${tokenHash};
     `;
-    if (!rows.length) return unauthorized("Invalid or expired token");
-    if (rows[0].status !== "active") return forbidden("Account not active");
-    if (new Date(rows[0].expires_at).getTime() < Date.now()) return unauthorized("Token expired");
+    // Use same error for all invalid token cases to avoid leaking info
+    if (!rows.length || rows[0].status !== "active" || new Date(rows[0].expires_at).getTime() < Date.now()) {
+      return unauthorized("Invalid or expired token");
+    }
 
     // one-time use
     await db/*sql*/`DELETE FROM author_portal_tokens WHERE token_hash = ${tokenHash};`;
