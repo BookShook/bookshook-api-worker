@@ -52,7 +52,8 @@ export async function handleAdmin(req: Request, env: Env) {
       const token = await signSession({ sub: "curator", role: "curator", exp, csrf }, env.SESSION_SECRET);
 
       const headers = new Headers();
-      headers.append("set-cookie", makeCookie(ADMIN_COOKIE, token, { maxAgeSeconds: 60 * 60 * 12 }));
+      // SameSite=None for cross-origin Pages preview deployments (CSRF protection still active)
+      headers.append("set-cookie", makeCookie(ADMIN_COOKIE, token, { maxAgeSeconds: 60 * 60 * 12, sameSite: "None" }));
       return json({ ok: true, csrf }, { headers });
     } catch (e: any) {
       return serverError("Login error", { message: String(e?.message || e) });
@@ -62,7 +63,7 @@ export async function handleAdmin(req: Request, env: Env) {
   // POST /api/admin/logout
   if (req.method === "POST" && url.pathname === "/api/admin/logout") {
     const headers = new Headers();
-    headers.append("set-cookie", clearCookie(ADMIN_COOKIE));
+    headers.append("set-cookie", clearCookie(ADMIN_COOKIE, "None"));
     return json({ ok: true }, { headers });
   }
 
@@ -76,9 +77,14 @@ export async function handleAdmin(req: Request, env: Env) {
     const minRatio = parseFloat(url.searchParams.get("min_ratio") ?? "0.75") || 0.75;
 
     const rows = await db/*sql*/`
-      SELECT p.*, t.upvotes, t.downvotes, t.total_votes, t.upvote_ratio
+      SELECT p.*,
+             v.upvotes, v.downvotes, v.total_votes, v.upvote_ratio,
+             t.name AS existing_tag_name, t.category AS existing_tag_category,
+             b.title AS book_title
       FROM tag_proposals p
-      LEFT JOIN proposal_vote_totals t ON t.id = p.id
+      LEFT JOIN proposal_vote_totals v ON v.id = p.id
+      LEFT JOIN tags t ON t.id = p.existing_tag_id
+      LEFT JOIN books b ON b.id = p.book_id
       WHERE p.status = ${status}
       ORDER BY p.created_at DESC
       LIMIT 200;

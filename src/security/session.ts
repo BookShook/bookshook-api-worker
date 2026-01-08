@@ -98,6 +98,6 @@ export function makeCookie(name: string, value: string, opts: {
   return parts.join("; ");
 }
 
-export function clearCookie(name: string) {
-  return `${name}=; Path=/; Max-Age=0; HttpOnly; Secure; SameSite=Strict`;
+export function clearCookie(name: string, sameSite: "Strict" | "Lax" | "None" = "Strict") {
+  return `${name}=; Path=/; Max-Age=0; HttpOnly; Secure; SameSite=${sameSite}`;
 }

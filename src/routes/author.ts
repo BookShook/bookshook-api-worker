@@ -63,14 +63,15 @@ export async function handleAuthor(req: Request, env: Env) {
     const session = await signSession({ sub: rows[0].author_account_id, role: "author", exp, csrf }, env.SESSION_SECRET);
 
     const headers = new Headers();
-    headers.append("set-cookie", makeCookie(AUTHOR_COOKIE, session, { maxAgeSeconds: 60 * 60 * 12 }));
+    // SameSite=None for cross-origin Pages preview deployments (CSRF protection still active)
+    headers.append("set-cookie", makeCookie(AUTHOR_COOKIE, session, { maxAgeSeconds: 60 * 60 * 12, sameSite: "None" }));
     return json({ author_account_id: rows[0].author_account_id, author_id: rows[0].author_id, email: rows[0].email, csrf }, { headers });
   }
 
   // POST /api/author/logout
   if (req.method === "POST" && url.pathname === "/api/author/logout") {
     const headers = new Headers();
-    headers.append("set-cookie", clearCookie(AUTHOR_COOKIE));
+    headers.append("set-cookie", clearCookie(AUTHOR_COOKIE, "None"));
     return json({ ok: true }, { headers });
   }
 
