@@ -24,7 +24,7 @@ async function getAdminSession(req: Request, env: Env) {
 
 export async function handleAdmin(req: Request, env: Env) {
   const url = new URL(req.url);
-  if (!url.pathname.startsWith("/api/admin/")) return null;
+  if (!url.pathname.startsWith("/api/vault/admin/")) return null;
 
   const db = getDb(env);
   const clientIp = req.headers.get("cf-connecting-ip") || req.headers.get("x-forwarded-for")?.split(",")[0] || "unknown";
@@ -34,8 +34,8 @@ export async function handleAdmin(req: Request, env: Env) {
     return forbidden("Invalid origin");
   }
 
-  // POST /api/admin/login
-  if (req.method === "POST" && url.pathname === "/api/admin/login") {
+  // POST /api/vault/admin/login
+  if (req.method === "POST" && url.pathname === "/api/vault/admin/login") {
     try {
       // Rate limit: 5 attempts per 15 minutes
       const rateCheck = await checkLoginRateLimit(env.RATE_LIMIT, clientIp, "admin");
@@ -68,7 +68,7 @@ export async function handleAdmin(req: Request, env: Env) {
       const headers = new Headers();
       headers.append("set-cookie", makeCookie(ADMIN_COOKIE, token, {
         maxAgeSeconds: 60 * 60 * 12,
-        path: "/api/admin",
+        path: "/api/vault/admin",
         sameSite: "Lax"
       }));
       return json({ ok: true, csrf }, { headers });
@@ -77,18 +77,18 @@ export async function handleAdmin(req: Request, env: Env) {
     }
   }
 
-  // POST /api/admin/logout
-  if (req.method === "POST" && url.pathname === "/api/admin/logout") {
+  // POST /api/vault/admin/logout
+  if (req.method === "POST" && url.pathname === "/api/vault/admin/logout") {
     const headers = new Headers();
-    headers.append("set-cookie", clearCookie(ADMIN_COOKIE, { path: "/api/admin", sameSite: "Lax" }));
+    headers.append("set-cookie", clearCookie(ADMIN_COOKIE, { path: "/api/vault/admin", sameSite: "Lax" }));
     return json({ ok: true }, { headers });
   }
 
   const session = await getAdminSession(req, env);
   if (!session) return unauthorized("Admin login required");
 
-  // GET /api/admin/proposals?status=pending|eligible
-  if (req.method === "GET" && url.pathname === "/api/admin/proposals") {
+  // GET /api/vault/admin/proposals?status=pending|eligible
+  if (req.method === "GET" && url.pathname === "/api/vault/admin/proposals") {
     const status = url.searchParams.get("status") ?? "pending";
     const minVotes = parseInt(url.searchParams.get("min_votes") ?? "20", 10) || 20;
     const minRatio = parseFloat(url.searchParams.get("min_ratio") ?? "0.75") || 0.75;
@@ -116,7 +116,7 @@ export async function handleAdmin(req: Request, env: Env) {
     rejection_reason: z.string().max(500).optional(),
   });
 
-  // POST /api/admin/proposals/:id/decide
+  // POST /api/vault/admin/proposals/:id/decide
   const decideMatch = url.pathname.match(/^\/api\/admin\/proposals\/([0-9a-fA-F-]{36})\/decide$/);
   if (decideMatch && req.method === "POST") {
     const csrfErr = requireCsrf(req, session);
@@ -205,8 +205,8 @@ export async function handleAdmin(req: Request, env: Env) {
     expires_hours: z.number().int().min(1).max(168).optional(), // up to 7 days
   });
 
-  // POST /api/admin/authors/invite  -> returns one-time token (you send it)
-  if (req.method === "POST" && url.pathname === "/api/admin/authors/invite") {
+  // POST /api/vault/admin/authors/invite  -> returns one-time token (you send it)
+  if (req.method === "POST" && url.pathname === "/api/vault/admin/authors/invite") {
     const csrfErr = requireCsrf(req, session);
     if (csrfErr) return csrfErr;
 
@@ -236,8 +236,8 @@ export async function handleAdmin(req: Request, env: Env) {
     return json({ token, expires_hours: hours, author_account_id: acct[0].id });
   }
 
-  // GET /api/admin/author-submissions?status=pending
-  if (req.method === "GET" && url.pathname === "/api/admin/author-submissions") {
+  // GET /api/vault/admin/author-submissions?status=pending
+  if (req.method === "GET" && url.pathname === "/api/vault/admin/author-submissions") {
     const status = url.searchParams.get("status") ?? "pending";
     const rows = await db/*sql*/`
       SELECT s.*, t.category, t.slug, t.name AS tag_name, b.title, a.name AS author_name
@@ -258,7 +258,7 @@ export async function handleAdmin(req: Request, env: Env) {
     reviewer_notes: z.string().max(500).optional(),
   });
 
-  // POST /api/admin/author-submissions/:id/decide
+  // POST /api/vault/admin/author-submissions/:id/decide
   const subDecideMatch = url.pathname.match(/^\/api\/admin\/author-submissions\/([0-9a-fA-F-]{36})\/decide$/);
   if (subDecideMatch && req.method === "POST") {
     const csrfErr = requireCsrf(req, session);

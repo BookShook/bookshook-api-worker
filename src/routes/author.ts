@@ -33,7 +33,7 @@ async function getAuthorSession(req: Request, env: Env) {
 
 export async function handleAuthor(req: Request, env: Env) {
   const url = new URL(req.url);
-  if (!url.pathname.startsWith("/api/author/")) return null;
+  if (!url.pathname.startsWith("/api/vault/author/")) return null;
 
   const db = getDb(env);
   const clientIp = req.headers.get("cf-connecting-ip") || req.headers.get("x-forwarded-for")?.split(",")[0] || "unknown";
@@ -43,8 +43,8 @@ export async function handleAuthor(req: Request, env: Env) {
     return forbidden("Invalid origin");
   }
 
-  // POST /api/author/login  (one-time invite token)
-  if (req.method === "POST" && url.pathname === "/api/author/login") {
+  // POST /api/vault/author/login  (one-time invite token)
+  if (req.method === "POST" && url.pathname === "/api/vault/author/login") {
     // Rate limit: 5 attempts per 15 minutes
     const rateCheck = await checkLoginRateLimit(env.RATE_LIMIT, clientIp, "author");
     if (!rateCheck.allowed) {
@@ -80,24 +80,24 @@ export async function handleAuthor(req: Request, env: Env) {
     const headers = new Headers();
     headers.append("set-cookie", makeCookie(AUTHOR_COOKIE, session, {
       maxAgeSeconds: 60 * 60 * 12,
-      path: "/api/author",
+      path: "/api/vault/author",
       sameSite: "Lax"
     }));
     return json({ author_account_id: rows[0].author_account_id, author_id: rows[0].author_id, email: rows[0].email, csrf }, { headers });
   }
 
-  // POST /api/author/logout
-  if (req.method === "POST" && url.pathname === "/api/author/logout") {
+  // POST /api/vault/author/logout
+  if (req.method === "POST" && url.pathname === "/api/vault/author/logout") {
     const headers = new Headers();
-    headers.append("set-cookie", clearCookie(AUTHOR_COOKIE, { path: "/api/author", sameSite: "Lax" }));
+    headers.append("set-cookie", clearCookie(AUTHOR_COOKIE, { path: "/api/vault/author", sameSite: "Lax" }));
     return json({ ok: true }, { headers });
   }
 
   const session = await getAuthorSession(req, env);
   if (!session) return unauthorized("Author login required");
 
-  // GET /api/author/me
-  if (req.method === "GET" && url.pathname === "/api/author/me") {
+  // GET /api/vault/author/me
+  if (req.method === "GET" && url.pathname === "/api/vault/author/me") {
     const rows = await db/*sql*/`
       SELECT id, author_id, email, display_name, status, created_at
       FROM author_portal_accounts
@@ -108,8 +108,8 @@ export async function handleAuthor(req: Request, env: Env) {
     return json({ me: rows[0], csrf: session.csrf });
   }
 
-  // GET /api/author/books  (books where this author is attached)
-  if (req.method === "GET" && url.pathname === "/api/author/books") {
+  // GET /api/vault/author/books  (books where this author is attached)
+  if (req.method === "GET" && url.pathname === "/api/vault/author/books") {
     const rows = await db/*sql*/`
       SELECT b.id, b.title, b.slug, b.cover_url, b.published_year
       FROM author_portal_accounts apa
@@ -122,8 +122,8 @@ export async function handleAuthor(req: Request, env: Env) {
     return json({ items: rows });
   }
 
-  // POST /api/author/submissions  (existing tags only)
-  if (req.method === "POST" && url.pathname === "/api/author/submissions") {
+  // POST /api/vault/author/submissions  (existing tags only)
+  if (req.method === "POST" && url.pathname === "/api/vault/author/submissions") {
     const csrfErr = requireCsrf(req, session);
     if (csrfErr) return csrfErr;
 
@@ -178,8 +178,8 @@ export async function handleAuthor(req: Request, env: Env) {
     }
   }
 
-  // GET /api/author/submissions?status=pending|approved|rejected
-  if (req.method === "GET" && url.pathname === "/api/author/submissions") {
+  // GET /api/vault/author/submissions?status=pending|approved|rejected
+  if (req.method === "GET" && url.pathname === "/api/vault/author/submissions") {
     const status = url.searchParams.get("status");
     const rows = await db/*sql*/`
       SELECT s.*, t.category, t.slug, t.name, b.title

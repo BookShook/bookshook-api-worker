@@ -17,14 +17,10 @@ import type { Env } from "./db";
 const ALLOWED_ORIGINS = [
   "https://bookshook.com",
   "https://www.bookshook.com",
-  "https://bookshook-vault.pages.dev",
 ];
 
 function isAllowedOrigin(origin: string): boolean {
-  if (ALLOWED_ORIGINS.includes(origin)) return true;
-  // Allow any subdomain of bookshook-vault.pages.dev (for preview deployments)
-  if (/^https:\/\/[a-z0-9-]+\.bookshook-vault\.pages\.dev$/.test(origin)) return true;
-  return false;
+  return ALLOWED_ORIGINS.includes(origin);
 }
 
 function getCorsHeaders(request: Request): Record<string, string> {
@@ -207,14 +203,14 @@ export default {
       if (res) return withCors(request, async () => res);
     }
 
-    // Author portal routes
-    if (url.pathname.startsWith("/api/author/")) {
+    // Author portal routes (under /vault/ for same-origin)
+    if (url.pathname.startsWith("/api/vault/author/")) {
       const res = await handleAuthor(request, env);
       if (res) return withCors(request, async () => res);
     }
 
-    // Admin routes
-    if (url.pathname.startsWith("/api/admin/")) {
+    // Admin routes (under /vault/ for same-origin)
+    if (url.pathname.startsWith("/api/vault/admin/")) {
       const res = await handleAdmin(request, env);
       if (res) return withCors(request, async () => res);
     }
