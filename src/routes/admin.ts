@@ -1,11 +1,13 @@
 import { z } from "zod";
 import type { Env } from "../db";
 import { getDb } from "../db";
-import { json, badRequest, unauthorized, forbidden, notFound, serverError } from "../lib/respond";
+import { json, badRequest, unauthorized, forbidden, notFound, serverError, tooManyRequests } from "../lib/respond";
 import { verifyPbkdf2Password } from "../security/pbkdf2";
 import { parseCookies, verifySession, signSession, makeCookie, clearCookie, randomToken } from "../security/session";
 import { requireCsrf } from "../security/csrf";
 import { slugify } from "../security/slugify";
+import { checkLoginRateLimit } from "../security/ratelimit";
+import { validateOrigin } from "../security/origin";
 
 const ADMIN_COOKIE = "bh_admin";
 
@@ -25,10 +27,22 @@ export async function handleAdmin(req: Request, env: Env) {
   if (!url.pathname.startsWith("/api/admin/")) return null;
 
   const db = getDb(env);
+  const clientIp = req.headers.get("cf-connecting-ip") || req.headers.get("x-forwarded-for")?.split(",")[0] || "unknown";
+
+  // Origin check for all mutation requests
+  if (!validateOrigin(req, env.SITE_ORIGIN)) {
+    return forbidden("Invalid origin");
+  }
 
   // POST /api/admin/login
   if (req.method === "POST" && url.pathname === "/api/admin/login") {
     try {
+      // Rate limit: 5 attempts per 15 minutes
+      const rateCheck = await checkLoginRateLimit(env.RATE_LIMIT, clientIp, "admin");
+      if (!rateCheck.allowed) {
+        return tooManyRequests("Too many login attempts. Try again later.", rateCheck.resetIn);
+      }
+
       let body: unknown;
       try { body = await req.json(); } catch { return badRequest("Invalid JSON"); }
       const parsed = LoginSchema.safeParse(body);
@@ -43,7 +57,7 @@ export async function handleAdmin(req: Request, env: Env) {
         });
       }
 
-      const iters = parseInt(env.ADMIN_PBKDF2_ITERS || "200000", 10);
+      const iters = parseInt(env.ADMIN_PBKDF2_ITERS || "100000", 10);
       const ok = await verifyPbkdf2Password(parsed.data.password, env.ADMIN_PBKDF2_SALT, env.ADMIN_PBKDF2_HASH, iters);
       if (!ok) return unauthorized("Invalid credentials");
 
@@ -123,7 +137,11 @@ export async function handleAdmin(req: Request, env: Env) {
     if (parsed.data.action === "reject") {
       await db/*sql*/`
         UPDATE tag_proposals
-        SET status='rejected', rejection_reason=${parsed.data.rejection_reason ?? "Rejected"}, updated_at=NOW()
+        SET status='rejected',
+            rejection_reason=${parsed.data.rejection_reason ?? "Rejected"},
+            decided_by=${session.sub},
+            decided_at=NOW(),
+            updated_at=NOW()
         WHERE id=${proposalId}::uuid;
       `;
       return json({ ok: true, status: "rejected" });
@@ -164,7 +182,14 @@ export async function handleAdmin(req: Request, env: Env) {
         }
       }
 
-      await db/*sql*/`UPDATE tag_proposals SET status='approved', updated_at=NOW() WHERE id=${proposalId}::uuid;`;
+      await db/*sql*/`
+        UPDATE tag_proposals
+        SET status='approved',
+            decided_by=${session.sub},
+            decided_at=NOW(),
+            updated_at=NOW()
+        WHERE id=${proposalId}::uuid;
+      `;
       return json({ ok: true, status: "approved" });
     } catch (e: any) {
       return serverError("Approve failed", { message: String(e?.message || e) });
@@ -254,7 +279,11 @@ export async function handleAdmin(req: Request, env: Env) {
     if (parsed.data.action === "reject") {
       await db/*sql*/`
         UPDATE author_tag_submissions
-        SET status='rejected', reviewer_notes=${parsed.data.reviewer_notes ?? "Rejected"}, updated_at=NOW()
+        SET status='rejected',
+            reviewer_notes=${parsed.data.reviewer_notes ?? "Rejected"},
+            decided_by=${session.sub},
+            decided_at=NOW(),
+            updated_at=NOW()
         WHERE id=${submissionId}::uuid;
       `;
       return json({ ok: true, status: "rejected" });
@@ -270,7 +299,11 @@ export async function handleAdmin(req: Request, env: Env) {
 
       await db/*sql*/`
         UPDATE author_tag_submissions
-        SET status='approved', reviewer_notes=${parsed.data.reviewer_notes ?? null}, updated_at=NOW()
+        SET status='approved',
+            reviewer_notes=${parsed.data.reviewer_notes ?? null},
+            decided_by=${session.sub},
+            decided_at=NOW(),
+            updated_at=NOW()
         WHERE id=${submissionId}::uuid;
       `;
 

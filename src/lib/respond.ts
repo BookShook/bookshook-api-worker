@@ -57,3 +57,9 @@ export function notFound(message = "Not Found") {
 export function serverError(message = "Server Error", details?: unknown) {
   return json({ error: message, details }, { status: 500 });
 }
+
+export function tooManyRequests(message = "Too many requests", retryAfter?: number) {
+  const headers: Record<string, string> = {};
+  if (retryAfter) headers["Retry-After"] = String(retryAfter);
+  return json({ error: message }, { status: 429, headers });
+}

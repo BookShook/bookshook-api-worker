@@ -1,9 +1,11 @@
 import { z } from "zod";
 import type { Env } from "../db";
 import { getDb } from "../db";
-import { json, badRequest, unauthorized, forbidden, notFound, serverError } from "../lib/respond";
+import { json, badRequest, unauthorized, forbidden, notFound, serverError, tooManyRequests } from "../lib/respond";
 import { parseCookies, verifySession, signSession, makeCookie, clearCookie, randomToken } from "../security/session";
 import { requireCsrf } from "../security/csrf";
+import { checkLoginRateLimit, checkSubmissionRateLimit } from "../security/ratelimit";
+import { validateOrigin } from "../security/origin";
 
 const AUTHOR_COOKIE = "bh_author";
 
@@ -34,9 +36,21 @@ export async function handleAuthor(req: Request, env: Env) {
   if (!url.pathname.startsWith("/api/author/")) return null;
 
   const db = getDb(env);
+  const clientIp = req.headers.get("cf-connecting-ip") || req.headers.get("x-forwarded-for")?.split(",")[0] || "unknown";
+
+  // Origin check for all mutation requests
+  if (!validateOrigin(req, env.SITE_ORIGIN)) {
+    return forbidden("Invalid origin");
+  }
 
   // POST /api/author/login  (one-time invite token)
   if (req.method === "POST" && url.pathname === "/api/author/login") {
+    // Rate limit: 5 attempts per 15 minutes
+    const rateCheck = await checkLoginRateLimit(env.RATE_LIMIT, clientIp, "author");
+    if (!rateCheck.allowed) {
+      return tooManyRequests("Too many login attempts. Try again later.", rateCheck.resetIn);
+    }
+
     let body: unknown;
     try { body = await req.json(); } catch { return badRequest("Invalid JSON"); }
     const parsed = LoginSchema.safeParse(body);
@@ -114,6 +128,12 @@ export async function handleAuthor(req: Request, env: Env) {
     const csrfErr = requireCsrf(req, session);
     if (csrfErr) return csrfErr;
 
+    // Rate limit: 50 submissions per hour
+    const rateCheck = await checkSubmissionRateLimit(env.RATE_LIMIT, session.sub);
+    if (!rateCheck.allowed) {
+      return tooManyRequests("Submission rate limit exceeded. Try again later.", rateCheck.resetIn);
+    }
+
     let body: unknown;
     try { body = await req.json(); } catch { return badRequest("Invalid JSON"); }
     const parsed = SubmitSchema.safeParse(body);
@@ -121,18 +141,29 @@ export async function handleAuthor(req: Request, env: Env) {
     const { book_id, tag_id, evidence } = parsed.data;
 
     // authz: author must be attached to book
-    const ok = await db/*sql*/`
+    const authzCheck = await db/*sql*/`
       SELECT 1
       FROM author_portal_accounts apa
       JOIN book_authors ba ON ba.author_id = apa.author_id
       WHERE apa.id = ${session.sub}::uuid AND ba.book_id = ${book_id}::uuid
       LIMIT 1;
     `;
-    if (!ok.length) return forbidden("You are not an author on that book.");
+    if (!authzCheck.length) return forbidden("You are not an author on that book.");
 
     // tag must exist
     const tag = await db/*sql*/`SELECT id, category, slug, is_premium, sensitive_flag FROM tags WHERE id = ${tag_id}::uuid;`;
     if (!tag.length) return badRequest("Unknown tag_id");
+
+    // Per-book limit: max 100 pending submissions per book per author
+    const pendingCount = await db/*sql*/`
+      SELECT COUNT(*) AS cnt FROM author_tag_submissions
+      WHERE author_account_id = ${session.sub}::uuid
+        AND book_id = ${book_id}::uuid
+        AND status = 'pending';
+    `;
+    if (parseInt(pendingCount[0]?.cnt || "0", 10) >= 100) {
+      return badRequest("Maximum pending submissions per book reached (100). Wait for review.");
+    }
 
     try {
       const rows = await db/*sql*/`

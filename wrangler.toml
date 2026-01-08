@@ -10,5 +10,9 @@ routes = [
   { pattern = "www.bookshook.com/api/*", zone_name = "bookshook.com" }
 ]
 
+[[kv_namespaces]]
+binding = "RATE_LIMIT"
+id = "ec6ce0e6f8e44f0a8235f4fab39c3eda"
+
 [vars]
 SITE_ORIGIN = "https://bookshook.com"
