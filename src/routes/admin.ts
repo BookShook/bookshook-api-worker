@@ -52,8 +52,13 @@ export async function handleAdmin(req: Request, env: Env) {
       const token = await signSession({ sub: "curator", role: "curator", exp, csrf }, env.SESSION_SECRET);
 
       const headers = new Headers();
-      // SameSite=None for cross-origin Pages preview deployments (CSRF protection still active)
-      headers.append("set-cookie", makeCookie(ADMIN_COOKIE, token, { maxAgeSeconds: 60 * 60 * 12, sameSite: "None" }));
+      // TODO: Change to SameSite=Lax once SPA is served from same origin (bookshook.com/vault/)
+      // Currently SameSite=None for cross-origin Pages preview deployments (CSRF protection still active)
+      headers.append("set-cookie", makeCookie(ADMIN_COOKIE, token, {
+        maxAgeSeconds: 60 * 60 * 12,
+        path: "/api/admin",
+        sameSite: "None"
+      }));
       return json({ ok: true, csrf }, { headers });
     } catch (e: any) {
       return serverError("Login error", { message: String(e?.message || e) });
@@ -63,7 +68,7 @@ export async function handleAdmin(req: Request, env: Env) {
   // POST /api/admin/logout
   if (req.method === "POST" && url.pathname === "/api/admin/logout") {
     const headers = new Headers();
-    headers.append("set-cookie", clearCookie(ADMIN_COOKIE, "None"));
+    headers.append("set-cookie", clearCookie(ADMIN_COOKIE, { path: "/api/admin", sameSite: "None" }));
     return json({ ok: true }, { headers });
   }
 
