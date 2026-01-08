@@ -1,0 +1,14 @@
+name = "bookshook-api"
+main = "src/index.ts"
+compatibility_date = "2025-12-01"
+
+workers_dev = true
+
+# Put back same-domain API routing
+routes = [
+  { pattern = "bookshook.com/api/*", zone_name = "bookshook.com" },
+  { pattern = "www.bookshook.com/api/*", zone_name = "bookshook.com" }
+]
+
+[vars]
+SITE_ORIGIN = "https://bookshook.com"

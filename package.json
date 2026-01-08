@@ -1,0 +1,26 @@
+{
+  "name": "bookshook-api-worker",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "contracts:generate": "tsx scripts/generate-contracts.ts",
+    "contracts:check": "tsx scripts/generate-contracts.ts --check",
+    "migrate": "tsx scripts/run-migration.ts",
+    "migrate:all": "tsx scripts/run-migration.ts --all"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "devDependencies": {
+    "tsx": "^4.20.0",
+    "vitest": "^4.0.16",
+    "wrangler": "^4.54.0"
+  },
+  "dependencies": {
+    "@neondatabase/serverless": "^1.0.2",
+    "zod": "^4.3.5"
+  }
+}
