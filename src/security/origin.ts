@@ -4,8 +4,6 @@
 const ALLOWED_ORIGINS = [
   "https://bookshook.com",
   "https://www.bookshook.com",
-  // Pages preview deployments - remove after migration to same-origin
-  /^https:\/\/[a-z0-9-]+\.bookshook-vault\.pages\.dev$/,
 ];
 
 export function validateOrigin(req: Request, siteOrigin: string): boolean {

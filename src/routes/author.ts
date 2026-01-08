@@ -77,12 +77,10 @@ export async function handleAuthor(req: Request, env: Env) {
     const session = await signSession({ sub: rows[0].author_account_id, role: "author", exp, csrf }, env.SESSION_SECRET);
 
     const headers = new Headers();
-    // TODO: Change to SameSite=Lax once SPA is served from same origin (bookshook.com/vault/)
-    // Currently SameSite=None for cross-origin Pages preview deployments (CSRF protection still active)
     headers.append("set-cookie", makeCookie(AUTHOR_COOKIE, session, {
       maxAgeSeconds: 60 * 60 * 12,
       path: "/api/author",
-      sameSite: "None"
+      sameSite: "Lax"
     }));
     return json({ author_account_id: rows[0].author_account_id, author_id: rows[0].author_id, email: rows[0].email, csrf }, { headers });
   }
@@ -90,7 +88,7 @@ export async function handleAuthor(req: Request, env: Env) {
   // POST /api/author/logout
   if (req.method === "POST" && url.pathname === "/api/author/logout") {
     const headers = new Headers();
-    headers.append("set-cookie", clearCookie(AUTHOR_COOKIE, { path: "/api/author", sameSite: "None" }));
+    headers.append("set-cookie", clearCookie(AUTHOR_COOKIE, { path: "/api/author", sameSite: "Lax" }));
     return json({ ok: true }, { headers });
   }
 
