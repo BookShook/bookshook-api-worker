@@ -162,10 +162,60 @@ export async function handleGetTags(request: Request, env: Env): Promise<Respons
 
   const tags = z.array(TagRowSchema).parse(tagsRaw);
 
+  // Transform tags into the format expected by frontend:
+  // { categories: [{ category: "name", tags: [...] }, ...] }
+  // Group tags by category, using category metadata for ordering
+  const categoryOrder = new Map<string, number>();
+  const categoryMeta = new Map<string, TagCategoryRow>();
+  for (const cat of categories) {
+    categoryOrder.set(cat.slug, cat.display_order);
+    categoryMeta.set(cat.slug, cat);
+  }
+
+  const tagsByCategory = new Map<string, Array<{
+    id: string;
+    slug: string;
+    name: string;
+    category: string;
+    singleSelect: boolean;
+    sensitiveFlag: boolean;
+    kind?: string | null;
+    warningType?: string | null;
+    severity?: number | null;
+    requiresEvidence?: boolean | null;
+  }>>();
+
+  for (const tag of tags) {
+    const cat = tag.category;
+    if (!tagsByCategory.has(cat)) {
+      tagsByCategory.set(cat, []);
+    }
+    const meta = categoryMeta.get(cat);
+    tagsByCategory.get(cat)!.push({
+      id: tag.id,
+      slug: tag.slug,
+      name: tag.display_name,
+      category: tag.category,
+      singleSelect: meta?.single_select ?? false,
+      sensitiveFlag: tag.sensitive_flag,
+    });
+  }
+
+  // Build response in category order
+  const sortedCategories = Array.from(tagsByCategory.keys()).sort((a, b) => {
+    const orderA = categoryOrder.get(a) ?? 999;
+    const orderB = categoryOrder.get(b) ?? 999;
+    return orderA - orderB;
+  });
+
+  const responseCategories = sortedCategories.map(catSlug => ({
+    category: catSlug,
+    tags: tagsByCategory.get(catSlug) ?? [],
+  }));
+
   return new Response(
     JSON.stringify({
-      categories,
-      tags,
+      categories: responseCategories,
     }),
     {
       status: 200,

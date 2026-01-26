@@ -4,7 +4,7 @@ import { getDb } from "../db";
 import { json, badRequest, unauthorized, forbidden, notFound, serverError, tooManyRequests } from "../lib/respond";
 import { parseCookies, verifySession, signSession, makeCookie, clearCookie, randomToken } from "../security/session";
 import { requireCsrf } from "../security/csrf";
-import { checkLoginRateLimit, checkSubmissionRateLimit } from "../security/ratelimit";
+import { checkLoginRateLimit, checkSubmissionRateLimit, checkBookIntakeRateLimit } from "../security/ratelimit";
 import { validateOrigin } from "../security/origin";
 
 const AUTHOR_COOKIE = "bh_author";
@@ -22,6 +22,44 @@ const SubmitSchema = z.object({
     location: z.string().max(128).optional(), // flexible
     notes: z.string().max(400).optional(),
   }).default({}),
+});
+
+const TagSelectionSchema = z.object({
+  tag_id: z.string().uuid(),
+  anchor: z.object({
+    chapter: z.string().max(64).optional(),
+    page: z.string().max(64).optional(),
+    percentage: z.string().max(16).optional(),
+    notes: z.string().max(400).optional(),
+  }).optional(),
+});
+
+const BookIntakeSchema = z.object({
+  // Book details
+  title: z.string().min(1).max(300),
+  asin: z.string().length(10).regex(/^B0[A-Z0-9]{8}$/i, "Invalid ASIN format"),
+  series_name: z.string().max(200).optional(),
+  series_number: z.string().max(10).optional(),
+  publication_date: z.string().optional(),
+
+  // Required axes (tag_ids)
+  world_framework: z.string().uuid(),
+  pairing: z.string().uuid(),
+  heat_level: z.string().uuid(),
+  series_status: z.string().uuid(),
+  consent_mode: z.string().uuid(),
+
+  // Tag selections
+  content_warnings: z.array(TagSelectionSchema).max(50).default([]),
+  tropes: z.array(TagSelectionSchema).max(100).default([]),
+  hero_archetypes: z.array(z.string().uuid()).max(10).default([]),
+  heroine_archetypes: z.array(z.string().uuid()).max(10).default([]),
+  representation: z.array(TagSelectionSchema).max(50).default([]),
+  kink_bundles: z.array(z.string().uuid()).max(20).default([]),
+  kink_details: z.array(TagSelectionSchema).max(50).default([]),
+
+  // Notes
+  notes: z.string().max(1000).optional(),
 });
 
 async function getAuthorSession(req: Request, env: Env) {
@@ -190,6 +228,111 @@ export async function handleAuthor(req: Request, env: Env) {
       ${status ? db/*sql*/`AND s.status = ${status}` : db/*sql*/``}
       ORDER BY s.created_at DESC
       LIMIT 200;
+    `;
+    return json({ items: rows });
+  }
+
+  // POST /api/vault/author/book-intake  (full book intake submission)
+  if (req.method === "POST" && url.pathname === "/api/vault/author/book-intake") {
+    const csrfErr = requireCsrf(req, session);
+    if (csrfErr) return csrfErr;
+
+    // Rate limit: 10 book intakes per hour
+    const rateCheck = await checkBookIntakeRateLimit(env.RATE_LIMIT, session.sub);
+    if (!rateCheck.allowed) {
+      return tooManyRequests("Book intake rate limit exceeded. Try again later.", rateCheck.resetIn);
+    }
+
+    let body: unknown;
+    try { body = await req.json(); } catch { return badRequest("Invalid JSON"); }
+    const parsed = BookIntakeSchema.safeParse(body);
+    if (!parsed.success) return badRequest("Invalid payload", parsed.error.flatten());
+
+    const data = parsed.data;
+
+    // Check for duplicate ASIN from same author (pending or approved)
+    const existingAsin = await db/*sql*/`
+      SELECT id, status FROM author_book_intakes
+      WHERE author_account_id = ${session.sub}::uuid
+        AND asin = ${data.asin}
+        AND status IN ('pending', 'approved')
+      LIMIT 1;
+    `;
+    if (existingAsin.length) {
+      return badRequest(`You already have a ${existingAsin[0].status} intake for this ASIN.`);
+    }
+
+    // Validate all tag_ids exist and belong to expected categories
+    const allTagIds = new Set<string>();
+    allTagIds.add(data.world_framework);
+    allTagIds.add(data.pairing);
+    allTagIds.add(data.heat_level);
+    allTagIds.add(data.series_status);
+    allTagIds.add(data.consent_mode);
+    data.content_warnings.forEach(t => allTagIds.add(t.tag_id));
+    data.tropes.forEach(t => allTagIds.add(t.tag_id));
+    data.hero_archetypes.forEach(id => allTagIds.add(id));
+    data.heroine_archetypes.forEach(id => allTagIds.add(id));
+    data.representation.forEach(t => allTagIds.add(t.tag_id));
+    data.kink_bundles.forEach(id => allTagIds.add(id));
+    data.kink_details.forEach(t => allTagIds.add(t.tag_id));
+
+    const tagIdArray = [...allTagIds];
+    const validTags = await db/*sql*/`
+      SELECT id, category, slug FROM tags WHERE id = ANY(${tagIdArray}::uuid[]);
+    `;
+    const validTagIds = new Set(validTags.map((t: any) => t.id));
+    const invalidIds = tagIdArray.filter(id => !validTagIds.has(id));
+    if (invalidIds.length) {
+      return badRequest("Invalid tag IDs", { invalid_tag_ids: invalidIds });
+    }
+
+    // Build the intake payload JSON
+    const intakePayload = {
+      title: data.title,
+      asin: data.asin,
+      series_name: data.series_name || null,
+      series_number: data.series_number || null,
+      publication_date: data.publication_date || null,
+      axes: {
+        world_framework: data.world_framework,
+        pairing: data.pairing,
+        heat_level: data.heat_level,
+        series_status: data.series_status,
+        consent_mode: data.consent_mode,
+      },
+      content_warnings: data.content_warnings,
+      tropes: data.tropes,
+      hero_archetypes: data.hero_archetypes,
+      heroine_archetypes: data.heroine_archetypes,
+      representation: data.representation,
+      kink_bundles: data.kink_bundles,
+      kink_details: data.kink_details,
+      notes: data.notes || null,
+    };
+
+    try {
+      const rows = await db/*sql*/`
+        INSERT INTO author_book_intakes (author_account_id, asin, intake_json, status)
+        VALUES (${session.sub}::uuid, ${data.asin}, ${JSON.stringify(intakePayload)}::jsonb, 'pending')
+        RETURNING id, asin, status, created_at;
+      `;
+      return json({ item: rows[0] }, { status: 201 });
+    } catch (e: any) {
+      return serverError("Failed to submit book intake", { message: String(e?.message || e) });
+    }
+  }
+
+  // GET /api/vault/author/book-intakes?status=pending|approved|rejected
+  if (req.method === "GET" && url.pathname === "/api/vault/author/book-intakes") {
+    const status = url.searchParams.get("status");
+    const rows = await db/*sql*/`
+      SELECT id, asin, intake_json->>'title' AS title, status, created_at, updated_at, admin_notes
+      FROM author_book_intakes
+      WHERE author_account_id = ${session.sub}::uuid
+      ${status ? db/*sql*/`AND status = ${status}` : db/*sql*/``}
+      ORDER BY created_at DESC
+      LIMIT 100;
     `;
     return json({ items: rows });
   }

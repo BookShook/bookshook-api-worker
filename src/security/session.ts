@@ -4,8 +4,16 @@
 export type SessionPayload = {
   sub: string;      // subject (UUID etc)
   role: string;     // e.g. "curator" | "author"
-  exp: number;      // unix seconds
+  exp: number;      // unix seconds (expiration)
+  iat: number;      // unix seconds (issued at) - for time-based revocation
+  jti: string;      // JWT ID - for specific session revocation
   csrf: string;     // random token for state-changing requests
+};
+
+// Revocation check result
+export type RevocationCheck = {
+  revoked: boolean;
+  reason?: string;
 };
 
 const te = new TextEncoder();
@@ -65,10 +73,81 @@ export async function verifySession(token: string, secret: string): Promise<Sess
     const now = Math.floor(Date.now() / 1000);
     if (!payload?.exp || payload.exp < now) return null;
     if (!payload?.sub || !payload?.role || !payload?.csrf) return null;
+    // jti and iat are optional for backwards compatibility with existing sessions
+    // New sessions will have them
     return payload;
   } catch {
     return null;
   }
+}
+
+// Check if a session has been revoked
+// Should be called after verifySession succeeds
+export async function checkSessionRevoked(
+  db: any,
+  session: SessionPayload
+): Promise<RevocationCheck> {
+  // Check specific JTI revocation
+  if (session.jti) {
+    const jtiRevoked = await db/*sql*/`
+      SELECT reason FROM session_revocations
+      WHERE jti = ${session.jti}
+      LIMIT 1;
+    `;
+    if (jtiRevoked.length > 0) {
+      return { revoked: true, reason: jtiRevoked[0].reason || "Session revoked" };
+    }
+  }
+
+  // Check subject-wide revocation (sessions issued before revocation time are invalid)
+  if (session.iat) {
+    const subjectRevoked = await db/*sql*/`
+      SELECT reason, revoke_sessions_before FROM session_revocations
+      WHERE subject = ${session.sub}
+        AND jti IS NULL
+        AND revoke_sessions_before IS NOT NULL
+        AND revoke_sessions_before > to_timestamp(${session.iat})
+      ORDER BY revoke_sessions_before DESC
+      LIMIT 1;
+    `;
+    if (subjectRevoked.length > 0) {
+      return { revoked: true, reason: subjectRevoked[0].reason || "All sessions revoked" };
+    }
+  }
+
+  return { revoked: false };
+}
+
+// Revoke a specific session by JTI
+export async function revokeSession(
+  db: any,
+  jti: string,
+  subject: string,
+  revokedBy: string,
+  reason?: string
+): Promise<void> {
+  await db/*sql*/`
+    INSERT INTO session_revocations (jti, subject, revoked_by, reason)
+    VALUES (${jti}, ${subject}, ${revokedBy}, ${reason || 'Manual revocation'});
+  `;
+}
+
+// Revoke all sessions for a subject (e.g., "log out all devices")
+export async function revokeAllSessions(
+  db: any,
+  subject: string,
+  revokedBy: string,
+  reason?: string
+): Promise<void> {
+  await db/*sql*/`
+    INSERT INTO session_revocations (subject, revoked_by, reason, revoke_sessions_before)
+    VALUES (${subject}, ${revokedBy}, ${reason || 'All sessions revoked'}, NOW());
+  `;
+}
+
+// Generate a unique session ID (JTI)
+export function generateJti(): string {
+  return randomToken(16);
 }
 
 export function parseCookies(req: Request) {

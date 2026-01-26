@@ -1,7 +1,13 @@
 // Simple sliding-window rate limiter using KV
 // Key format: "rl:{scope}:{identifier}" -> JSON { count, windowStart }
 
-type RateLimitResult = { allowed: boolean; remaining: number; resetIn: number };
+export type RateLimitResult = {
+  allowed: boolean;
+  remaining: number;
+  resetIn: number;
+  limit: number;
+  scope: string;
+};
 
 export async function checkRateLimit(
   kv: KVNamespace,
@@ -25,14 +31,37 @@ export async function checkRateLimit(
   const resetIn = windowSeconds - (now - data.windowStart);
 
   if (data.count >= limit) {
-    return { allowed: false, remaining: 0, resetIn };
+    return { allowed: false, remaining: 0, resetIn, limit, scope };
   }
 
   // Increment and save
   data.count += 1;
   await kv.put(key, JSON.stringify(data), { expirationTtl: windowSeconds + 60 });
 
-  return { allowed: true, remaining: limit - data.count, resetIn };
+  return { allowed: true, remaining: limit - data.count, resetIn, limit, scope };
+}
+
+// Create a 429 Too Many Requests response with proper headers
+export function rateLimitResponse(result: RateLimitResult): Response {
+  return new Response(
+    JSON.stringify({
+      error: "rate_limited",
+      message: `Too many requests. Try again in ${result.resetIn} seconds.`,
+      retry_after_seconds: result.resetIn,
+      limit: result.limit,
+      scope: result.scope,
+    }),
+    {
+      status: 429,
+      headers: {
+        "Content-Type": "application/json",
+        "Retry-After": String(result.resetIn),
+        "X-RateLimit-Limit": String(result.limit),
+        "X-RateLimit-Remaining": String(result.remaining),
+        "X-RateLimit-Reset": String(Math.floor(Date.now() / 1000) + result.resetIn),
+      },
+    }
+  );
 }
 
 // Pre-configured limiters for common use cases
@@ -51,4 +80,12 @@ export async function checkSubmissionRateLimit(
 ): Promise<RateLimitResult> {
   // 50 submissions per hour per author
   return checkRateLimit(kv, "submit", authorAccountId, 50, 60 * 60);
+}
+
+export async function checkBookIntakeRateLimit(
+  kv: KVNamespace,
+  authorAccountId: string
+): Promise<RateLimitResult> {
+  // 10 book intakes per hour per author
+  return checkRateLimit(kv, "book-intake", authorAccountId, 10, 60 * 60);
 }

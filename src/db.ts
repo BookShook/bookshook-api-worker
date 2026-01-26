@@ -8,6 +8,8 @@ export type Env = {
   ADMIN_PBKDF2_HASH: string;
   ADMIN_PBKDF2_ITERS?: string;
   RATE_LIMIT: KVNamespace;
+  COVERS_BUCKET?: R2Bucket;
+  COVERS_CDN_URL?: string; // e.g., "https://cdn.bookshook.com/covers"
 };
 
 // Recommended for serverless; keeps fetch-based connections efficient.

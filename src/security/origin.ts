@@ -4,6 +4,7 @@
 const ALLOWED_ORIGINS = [
   "https://bookshook.com",
   "https://www.bookshook.com",
+  "https://admin.bookshook.com",
 ];
 
 export function validateOrigin(req: Request, siteOrigin: string): boolean {

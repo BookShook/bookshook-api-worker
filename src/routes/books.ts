@@ -1,5 +1,45 @@
 import { z } from "zod";
 import { getDb, type Env } from "../db";
+import { getAuthenticatedUser } from "../lib/auth";
+
+// Server-authoritative preset definitions
+// When a preset is used, the server OVERWRITES any client-supplied filters
+// This prevents gaming: ?preset=devastate&tags=anything_i_want won't work
+type PresetDefinition = {
+  tags?: string[];           // Authoritative tag slugs (server-owned)
+  orderBy?: "newest" | "relevance";
+  limit?: number;            // Optional cap for browse modes
+};
+
+const PRESET_DEFINITIONS: Record<string, PresetDefinition> = {
+  // Mood presets - curated tag combinations
+  devastate: {
+    tags: ["angsty_emotional", "slow_burn", "hurt_comfort"],
+    orderBy: "newest",
+  },
+  comfort: {
+    tags: ["cozy_comfort_read", "rom_com_humor"],
+    orderBy: "newest",
+  },
+  unhinged: {
+    tags: ["dark_tone", "possessive_obsessive", "morally_grey_hero"],
+    orderBy: "newest",
+  },
+  slowburn: {
+    tags: ["slow_burn", "pining_unrequited", "enemies_to_lovers"],
+    orderBy: "newest",
+  },
+  grovel: {
+    tags: ["alphahole", "second_chance", "hurt_comfort"],
+    orderBy: "newest",
+  },
+  // Browse modes - no tags, special ordering
+  fresh: {
+    // No tags - shows all recently added
+    orderBy: "newest",
+    limit: 60,
+  },
+};
 
 const SlugSchema = z
   .string()
@@ -86,6 +126,36 @@ export async function handleGetBooks(request: Request, env: Env): Promise<Respon
   } catch (e) {
     return json({}, { error: (e as Error).message }, 400);
   }
+
+  // Check for valid preset (server-authoritative filter bypass for free users)
+  const presetParam = url.searchParams.get("preset");
+  const presetDef = presetParam ? PRESET_DEFINITIONS[presetParam] : null;
+
+  // SECURITY: If using a preset, server OVERWRITES client-supplied tags
+  // This prevents gaming: ?preset=devastate&tags=anything_i_want
+  if (presetDef) {
+    // Server owns the query - ignore any client-supplied tags
+    tagSlugs = presetDef.tags ?? null;
+  }
+
+  // Filter enforcement: tags require paid membership UNLESS using a valid preset
+  if (tagSlugs && tagSlugs.length > 0 && !presetDef) {
+    const auth = await getAuthenticatedUser(request, env.SITE_ORIGIN);
+    if (!auth.ok || !auth.user.isPaid) {
+      return json(
+        { "cache-control": "no-store", vary: "cookie" },
+        {
+          code: "FILTER_REQUIRES_MEMBERSHIP",
+          message: "Filtered search is members-only",
+          upgradeUrl: "/join",
+        },
+        403
+      );
+    }
+  }
+
+  // Apply preset limit if specified (e.g., fresh mode caps at 60)
+  const presetLimit = presetDef?.limit;
 
   const { q, page, pageSize } = parsed.data;
   const offset = (page - 1) * pageSize;
@@ -204,7 +274,7 @@ export async function handleGetBooks(request: Request, env: Env): Promise<Respon
           `
           : sql`b.created_at DESC, b.title ASC`
       }
-    LIMIT ${pageSize}
+    LIMIT ${presetLimit ? Math.min(pageSize, presetLimit - offset) : pageSize}
     OFFSET ${offset}
   `;
 
@@ -229,6 +299,10 @@ export async function handleGetBooks(request: Request, env: Env): Promise<Respon
   // Determine sort used
   const sort = q ? "relevance" : "newest";
 
+  // Cap total if preset has a limit (e.g., fresh mode)
+  const effectiveTotal = presetLimit ? Math.min(total, presetLimit) : total;
+  const effectiveTotalPages = Math.max(1, Math.ceil(effectiveTotal / pageSize));
+
   return json(
     {
       // Search results change; cache lightly.
@@ -237,10 +311,11 @@ export async function handleGetBooks(request: Request, env: Env): Promise<Respon
     {
       page,
       pageSize,
-      total,
-      totalPages,
+      total: effectiveTotal,
+      totalPages: effectiveTotalPages,
       filtersApplied,
       sort,
+      preset: presetParam || undefined, // Echo back which preset was used
       items,
     }
   );

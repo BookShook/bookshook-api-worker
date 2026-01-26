@@ -4,10 +4,11 @@ compatibility_date = "2025-12-01"
 
 workers_dev = true
 
-# Put back same-domain API routing
+# API routes only - Ghost serves /vault/* via theme
 routes = [
   { pattern = "bookshook.com/api/*", zone_name = "bookshook.com" },
-  { pattern = "www.bookshook.com/api/*", zone_name = "bookshook.com" }
+  { pattern = "www.bookshook.com/api/*", zone_name = "bookshook.com" },
+  { pattern = "admin.bookshook.com/api/*", zone_name = "bookshook.com" }
 ]
 
 [[kv_namespaces]]
@@ -16,3 +17,16 @@ id = "ec6ce0e6f8e44f0a8235f4fab39c3eda"
 
 [vars]
 SITE_ORIGIN = "https://bookshook.com"
+COVERS_CDN_URL = "https://cdn.bookshook.com/covers"
+
+# R2 bucket for book covers
+# Create bucket first: wrangler r2 bucket create bookshook-covers
+# Then set up custom domain: cdn.bookshook.com -> R2 bucket
+[[r2_buckets]]
+binding = "COVERS_BUCKET"
+bucket_name = "bookshook-covers"
+
+# Cron trigger for processing search alerts
+# Runs every hour at minute 15
+[triggers]
+crons = ["15 * * * *"]

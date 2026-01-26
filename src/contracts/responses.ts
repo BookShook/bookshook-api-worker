@@ -82,6 +82,7 @@ export const CollectionListItemSchema = z.object({
   description: z.string().nullable(),
   coverUrl: z.string().nullable(),
   bookCount: z.number().int().min(0),
+  bookCovers: z.array(z.string()), // First 3 book covers from collection
 });
 
 export const CollectionsListResponseSchema = z.object({

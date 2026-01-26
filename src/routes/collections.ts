@@ -64,7 +64,17 @@ export async function handleGetCollections(request: Request, env: Env): Promise<
       c.title,
       c.description,
       c.cover_url,
-      COALESCE(COUNT(cb.book_id), 0)::int AS book_count
+      COALESCE(COUNT(DISTINCT cb.book_id), 0)::int AS book_count,
+      COALESCE(
+        (
+          SELECT jsonb_agg(b.cover_url ORDER BY cb2.book_order ASC)
+          FROM collection_books cb2
+          JOIN books b ON b.id = cb2.book_id
+          WHERE cb2.collection_id = c.id AND b.cover_url IS NOT NULL
+          LIMIT 3
+        ),
+        '[]'::jsonb
+      ) AS book_covers
     FROM collections c
     LEFT JOIN collection_books cb ON cb.collection_id = c.id
     GROUP BY c.id
@@ -85,6 +95,7 @@ export async function handleGetCollections(request: Request, env: Env): Promise<
       description: r.description ?? null,
       coverUrl: r.cover_url ?? null,
       bookCount: r.book_count ?? 0,
+      bookCovers: safeJsonParse<string[]>(r.book_covers),
     })),
   };
 

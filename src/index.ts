@@ -11,6 +11,14 @@ import { handleGetRecommendations } from "./routes/recommendations";
 import { handleCommunity } from "./routes/community";
 import { handleAuthor } from "./routes/author";
 import { handleAdmin } from "./routes/admin";
+import {
+  handleCreateAlert,
+  handleGetAlerts,
+  handleDeleteAlert,
+  handleUpdateAlert,
+  handleUnsubscribeAlert,
+} from "./routes/alerts";
+import { processSearchAlerts } from "./scheduled/processAlerts";
 import type { Env } from "./db";
 
 // CORS allowed origins
@@ -24,14 +32,27 @@ function isAllowedOrigin(origin: string): boolean {
 }
 
 function getCorsHeaders(request: Request): Record<string, string> {
-  const origin = request.headers.get("origin") ?? "";
-  const allowedOrigin = isAllowedOrigin(origin) ? origin : ALLOWED_ORIGINS[0];
+  const origin = request.headers.get("origin");
 
+  // No Origin header = same-origin request or non-browser client
+  // Don't interfere - return empty (no CORS headers needed)
+  if (!origin) {
+    return {};
+  }
+
+  // Origin present but not allowed = cross-origin from untrusted source
+  // Return empty so browser blocks the request
+  if (!isAllowedOrigin(origin)) {
+    return {};
+  }
+
+  // Origin present and allowed = legitimate cross-origin request
   return {
-    "Access-Control-Allow-Origin": allowedOrigin,
+    "Access-Control-Allow-Origin": origin,
     "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type, Cookie, x-ghost-member-id, x-csrf-token",
+    "Access-Control-Allow-Headers": "Content-Type, Cookie, x-ghost-member-id, x-csrf-token, Idempotency-Key",
     "Access-Control-Allow-Credentials": "true",
+    "Vary": "Origin",  // Important: tells caches this response varies by Origin
   };
 }
 
@@ -79,8 +100,26 @@ export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
 
+    // Let Ghost serve the vault page and theme assets
+    // Worker only handles /vault/api/* if needed in future
+    // The vault SPA is now part of the Ghost theme at /assets/vault/
+
     // Handle CORS preflight
     if (request.method === "OPTIONS") {
+      const origin = request.headers.get("origin");
+
+      // No Origin header = not a CORS preflight, just a regular OPTIONS request
+      // Return 204 with no CORS headers
+      if (!origin) {
+        return new Response(null, { status: 204 });
+      }
+
+      // Origin present but not allowed = block the preflight
+      if (!isAllowedOrigin(origin)) {
+        return new Response("Forbidden", { status: 403 });
+      }
+
+      // Origin present and allowed = return CORS headers
       return new Response(null, {
         status: 204,
         headers: getCorsHeaders(request),
@@ -139,6 +178,26 @@ export default {
     // Premium: Recommendations
     if (url.pathname === "/api/recommendations" && request.method === "GET") {
       return withCors(request, () => handleGetRecommendations(request, env));
+    }
+
+    // Search Alerts (Notify Me feature)
+    if (url.pathname === "/api/alerts" && request.method === "POST") {
+      return withCors(request, () => handleCreateAlert(request, env));
+    }
+    if (url.pathname === "/api/alerts" && request.method === "GET") {
+      return withCors(request, () => handleGetAlerts(request, env));
+    }
+    // Unsubscribe via token (no auth, called by bridge)
+    if (url.pathname === "/api/alerts/unsubscribe" && request.method === "POST") {
+      return withCors(request, () => handleUnsubscribeAlert(request, env));
+    }
+    if (url.pathname.startsWith("/api/alerts/") && request.method === "DELETE") {
+      const alertId = decodeURIComponent(url.pathname.slice("/api/alerts/".length));
+      return withCors(request, () => handleDeleteAlert(request, env, alertId));
+    }
+    if (url.pathname.startsWith("/api/alerts/") && request.method === "PATCH") {
+      const alertId = decodeURIComponent(url.pathname.slice("/api/alerts/".length));
+      return withCors(request, () => handleUpdateAlert(request, env, alertId));
     }
 
     // Auth primitive
@@ -216,5 +275,10 @@ export default {
     }
 
     return new Response("404 Not Found", { status: 404, headers: getCorsHeaders(request) });
+  },
+
+  // Cron handler for processing search alerts
+  async scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext): Promise<void> {
+    ctx.waitUntil(processSearchAlerts(env));
   }
 };
